@@ -73,6 +73,8 @@ func GetSecrets(secretsCache wranglerv1.SecretCache, secretClient wranglerv1.Sec
 	subscriptionIDBytes := secret.Data["azurecredentialConfig-subscriptionId"]
 	clientIDBytes := secret.Data["azurecredentialConfig-clientId"]
 	clientSecretBytes := secret.Data["azurecredentialConfig-clientSecret"]
+	clientEnvironment := string(secret.Data["azurecredentialConfig-environment"])
+	azureEnvironment := GetEnvironment(clientEnvironment)
 
 	cannotBeNilError := "field [azurecredentialConfig-%s] must be provided in cloud credential"
 	if subscriptionIDBytes == nil {
@@ -89,11 +91,11 @@ func GetSecrets(secretsCache wranglerv1.SecretCache, secretClient wranglerv1.Sec
 	cred.SubscriptionID = string(subscriptionIDBytes)
 	cred.ClientID = string(clientIDBytes)
 	cred.ClientSecret = string(clientSecretBytes)
-	cred.AuthBaseURL = spec.AuthBaseURL
-	cred.BaseURL = spec.BaseURL
+	cred.AuthBaseURL = &azureEnvironment.ActiveDirectoryEndpoint
+	cred.BaseURL = &azureEnvironment.ResourceManagerEndpoint
 
 	if cred.TenantID == "" {
-		cred.TenantID, err = GetCachedTenantID(secretClient, cred.SubscriptionID, secret)
+		cred.TenantID, err = GetCachedTenantID(secretClient, cred.SubscriptionID, secret, azureEnvironment)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +108,7 @@ type secretClient interface {
 	Update(*v1.Secret) (*v1.Secret, error)
 }
 
-func GetCachedTenantID(secretClient secretClient, subscriptionID string, secret *v1.Secret) (string, error) {
+func GetCachedTenantID(secretClient secretClient, subscriptionID string, secret *v1.Secret, azureEnvironment azure.Environment) (string, error) {
 	annotations := secret.GetAnnotations()
 	tenantAnno, timestamp := annotations[tenantIDAnnotation], annotations[tenantIDTimestampAnnotation]
 	if tenantAnno != "" && timestamp != "" {
@@ -121,7 +123,7 @@ func GetCachedTenantID(secretClient secretClient, subscriptionID string, secret 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	logrus.Debugf("retrieving tenant ID from Azure public cloud")
-	tenantID, err := azureutil.FindTenantID(ctx, azure.PublicCloud, subscriptionID)
+	tenantID, err := azureutil.FindTenantID(ctx, azureEnvironment, subscriptionID)
 	if err != nil {
 		return "", err
 	}
@@ -147,4 +149,17 @@ func NewClusterClient(cred *Credentials) (*containerservice.ManagedClustersClien
 	client.Authorizer = authorizer
 
 	return &client, nil
+}
+
+func GetEnvironment(env string) azure.Environment {
+	switch env {
+	case "AzureGermanCloud":
+		return azure.GermanCloud
+	case "AzureChinaCloud":
+		return azure.ChinaCloud
+	case "AzureUSGovernmentCloud":
+		return azure.USGovernmentCloud
+	default:
+		return azure.PublicCloud
+	}
 }
