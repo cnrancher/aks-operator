@@ -117,6 +117,12 @@ var _ = Describe("newManagedCluster", func() {
 		Expect(agentPoolProfiles[0].EnableAutoScaling).To(Equal(clusterSpec.NodePools[0].EnableAutoScaling))
 		Expect(agentPoolProfiles[0].MinCount).To(Equal(clusterSpec.NodePools[0].MinCount))
 		Expect(agentPoolProfiles[0].MaxCount).To(Equal(clusterSpec.NodePools[0].MaxCount))
+		Expect(agentPoolProfiles[0].UpgradeSettings.MaxSurge).To(Equal(clusterSpec.NodePools[0].MaxSurge))
+		expectedNodeTaints := *agentPoolProfiles[0].NodeTaints
+		clusterSpecNodeTaints := *clusterSpec.NodePools[0].NodeTaints
+		Expect(expectedNodeTaints).To(HaveLen(1))
+		Expect(expectedNodeTaints[0]).To(Equal(clusterSpecNodeTaints[0]))
+		Expect(agentPoolProfiles[0].NodeLabels).To(HaveKeyWithValue("node-label", to.StringPtr("test-value")))
 		Expect(managedCluster.LinuxProfile.AdminUsername).To(Equal(clusterSpec.LinuxAdminUsername))
 		sshPublicKeys := *managedCluster.LinuxProfile.SSH.PublicKeys
 		Expect(sshPublicKeys).To(HaveLen(1))
@@ -157,7 +163,8 @@ var _ = Describe("newManagedCluster", func() {
 			Return(operationalinsights.Workspace{
 				ID: to.StringPtr("test-workspace-id"),
 			}, nil)
-		clusterSpec.NetworkPlugin = to.StringPtr("")
+		clusterSpec.NetworkPlugin = to.StringPtr("kubenet")
+		clusterSpec.NetworkPolicy = to.StringPtr("calico")
 		managedCluster, err := createManagedCluster(ctx, cred, workplacesClientMock, clusterSpec, "test-phase")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(managedCluster.NetworkProfile.NetworkPlugin).To(Equal(containerservice.Kubenet))
@@ -292,6 +299,14 @@ var _ = Describe("newManagedCluster", func() {
 		_, err := createManagedCluster(ctx, cred, workplacesClientMock, clusterSpec, "test-phase")
 		Expect(err).To(HaveOccurred())
 	})
+
+	It("should fail if network policy is azure and network plugin is kubenet", func() {
+		workplacesClientMock.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(operationalinsights.Workspace{}, nil).Times(0)
+		clusterSpec.NetworkPlugin = to.StringPtr("kubenet")
+		clusterSpec.NetworkPolicy = to.StringPtr("azure")
+		_, err := createManagedCluster(ctx, cred, workplacesClientMock, clusterSpec, "test-phase")
+		Expect(err).To(HaveOccurred())
+	})
 })
 
 var _ = Describe("CreateCluster", func() {
@@ -352,6 +367,11 @@ var _ = Describe("CreateOrUpdateAgentPool", func() {
 			EnableAutoScaling:   to.BoolPtr(true),
 			MinCount:            to.Int32Ptr(1),
 			MaxCount:            to.Int32Ptr(2),
+			MaxSurge:            to.StringPtr("10%"),
+			NodeTaints:          to.StringSlicePtr([]string{"node=taint:NoSchedule"}),
+			NodeLabels: map[string]*string{
+				"node-label": to.StringPtr("test-value"),
+			},
 		}
 	})
 
@@ -377,6 +397,11 @@ var _ = Describe("CreateOrUpdateAgentPool", func() {
 					EnableAutoScaling:   nodePoolSpec.EnableAutoScaling,
 					MinCount:            nodePoolSpec.MinCount,
 					MaxCount:            nodePoolSpec.MaxCount,
+					NodeTaints:          nodePoolSpec.NodeTaints,
+					NodeLabels:          nodePoolSpec.NodeLabels,
+					UpgradeSettings: &containerservice.AgentPoolUpgradeSettings{
+						MaxSurge: nodePoolSpec.MaxSurge,
+					},
 				},
 			}).Return(containerservice.AgentPoolsCreateOrUpdateFuture{}, nil)
 		Expect(CreateOrUpdateAgentPool(ctx, agentPoolClientMock, clusterSpec, nodePoolSpec)).To(Succeed())
@@ -397,7 +422,7 @@ func newTestClusterSpec() *aksv1.AKSClusterConfigSpec {
 		Tags: map[string]string{
 			"test-tag": "test-value",
 		},
-		NetworkPolicy:           to.StringPtr("calico"),
+		NetworkPolicy:           to.StringPtr("azure"),
 		NetworkPlugin:           to.StringPtr("azure"),
 		NetworkDNSServiceIP:     to.StringPtr("test-dns-service-ip"),
 		NetworkDockerBridgeCIDR: to.StringPtr("test-docker-bridge-cidr"),
@@ -421,6 +446,11 @@ func newTestClusterSpec() *aksv1.AKSClusterConfigSpec {
 				EnableAutoScaling:   to.BoolPtr(true),
 				MinCount:            to.Int32Ptr(1),
 				MaxCount:            to.Int32Ptr(2),
+				MaxSurge:            to.StringPtr("10%"),
+				NodeTaints:          to.StringSlicePtr([]string{"node=taint:NoSchedule"}),
+				NodeLabels: map[string]*string{
+					"node-label": to.StringPtr("test-value"),
+				},
 			},
 		},
 		LinuxAdminUsername:         to.StringPtr("test-admin-username"),
